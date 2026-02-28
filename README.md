@@ -1,0 +1,316 @@
+# ISL YOLO WebApp (Realtime MVP)
+
+A production-style local MVP for **Indian Sign Language (ISL) recognition** using **Ultralytics YOLO + FastAPI + WebSocket + browser webcam**.
+
+This project is designed for:
+- realtime sign prediction in browser video
+- temporal smoothing and token committing for stable text output
+- optional text-to-speech (TTS)
+- future extension to dynamic sign sequence models
+
+It does **not** claim full sentence-level ISL grammar translation from YOLO alone.
+
+## 1) What the app does
+
+- Captures webcam frames in browser (`getUserMedia`)
+- Sends compressed frames over WebSocket at controlled FPS
+- Runs YOLO inference on backend
+- Applies temporal smoothing + vote-based commit logic
+- Builds text from committed signs (`space`, `delete` supported)
+- Converts typed text to a playable ISL token/sign sequence in UI (text-to-sign MVP)
+- Optionally speaks committed output in browser via `SpeechSynthesis`
+- Exposes health, REST fallback, and modular code for model upgrades
+
+## 2) Architecture (ASCII)
+
+```text
+Browser (frontend/app.js)
+  |- Webcam capture (getUserMedia)
+  |- Frame throttle/compress (JPEG)
+  |- WebSocket client + reconnect
+  |- UI: raw/stable/top-k/fps/latency/text
+  |- TTS on token commit
+  v
+FastAPI backend (backend/app.py)
+  |- /ws realtime endpoint
+  |- /predict and /predict/base64 fallback
+  |- /sign-sample/{label} sign image sample endpoint
+  |- /health endpoint
+  v
+Inference service (backend/inference.py)
+  |- Optional hand ROI stage (MediaPipe): crop/mask hand region
+  |- YOLOInferenceEngine (load once, detect/direct_cls)
+  |- Detect-mode candidate scoring: confidence + bbox area + center proximity
+  |- TemporalStabilizer (history, votes, margin, cooldown, dedupe)
+  |- DynamicSequenceRecognizerHook (stub for future dynamic signs)
+  v
+Model file
+  |- backend/models/best.pt (user-provided)
+```
+
+## 3) Prerequisites
+
+- Python 3.11+
+- macOS or Linux
+- Webcam access
+- (Optional GPU) CUDA-compatible PyTorch install
+- (Optional, recommended) `mediapipe` for hand-only ROI preprocessing
+
+## 4) Installation
+
+```bash
+cd isl-yolo-webapp
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+cp .env.example .env
+```
+
+## 5) Run backend
+
+```bash
+cd isl-yolo-webapp
+source .venv/bin/activate
+uvicorn backend.app:app --host 127.0.0.1 --port 8000 --reload
+```
+
+Backend endpoints:
+- `GET /health`
+- `GET /sign-sample/{label}` (serves one sample image for a sign label if dataset is present)
+- `WS  /ws`
+- `POST /predict` (multipart image)
+- `POST /predict/base64`
+
+Health check:
+```bash
+curl -s http://127.0.0.1:8000/health
+```
+
+## 6) Run frontend
+
+Use any static server from `frontend/`:
+
+```bash
+cd isl-yolo-webapp/frontend
+python3 -m http.server 5500
+```
+
+Open:
+- `http://127.0.0.1:5500`
+
+Default backend URL in UI:
+- `http://127.0.0.1:8000`
+
+## 7) Add model weights
+
+Place your trained weights at:
+
+```text
+isl-yolo-webapp/backend/models/best.pt
+```
+
+Or override with env:
+
+```bash
+MODEL_PATH=backend/models/my_model.pt
+```
+
+If weights are missing, backend still runs and returns clear model error status.
+
+## 8) Dataset modes and training
+
+This app supports two data/model modes. Set `MODEL_MODE` accordingly.
+
+### A) Detection mode (`MODEL_MODE=detect`)
+
+- Dataset format: YOLO detection images + bbox labels.
+- Reference: `data/README_dataset.md` -> “Mode A: YOLO Detection”.
+- Training script: `backend/train/train_yolo.py` (detection flow).
+
+```bash
+cd isl-yolo-webapp
+source .venv/bin/activate
+python -m backend.train.train_yolo \
+  --data backend/train/dataset.yaml \
+  --model yolo11n.pt \
+  --epochs 80 \
+  --imgsz 640 \
+  --batch 16 \
+  --device cpu \
+  --project runs/isl \
+  --name isl_mvp_detect
+```
+
+Validation example:
+
+```bash
+yolo detect val model=runs/isl/isl_mvp_detect/weights/best.pt data=backend/train/dataset.yaml imgsz=640
+```
+
+Unknown/no-sign guidance in detection mode:
+- Prefer negative no-sign frames with **no object labels**.
+- You do not need to force an `unknown` bbox class.
+
+### B) Classification mode (`MODEL_MODE=direct_cls`)
+
+- Dataset format: folder-per-class classification dataset.
+- Reference: `data/README_dataset.md` -> “Mode B: YOLO Classification”.
+- `direct_cls` requires a **classification-trained** model.
+- A detection-trained `.pt` is not a direct substitute for classification inference.
+
+Typical classification training example (Ultralytics CLI):
+
+```bash
+yolo classify train model=yolo11n-cls.pt data=data/isl_dataset_cls epochs=80 imgsz=224 batch=64
+```
+
+Unknown/no-sign guidance in classification mode:
+- Include an `unknown` (or `no_sign`) class folder when possible.
+
+## 9) Export model to ONNX
+
+```bash
+cd isl-yolo-webapp
+source .venv/bin/activate
+python -m backend.train.export_model \
+  --weights backend/models/best.pt \
+  --imgsz 640 \
+  --opset 12
+```
+
+Output `.onnx` will be generated by Ultralytics export.
+
+## 10) Realtime WebSocket message contract
+
+Client -> Server:
+
+```json
+{"type":"frame","image":"data:image/jpeg;base64,...","ts":1739999999999}
+```
+
+Server -> Client:
+
+```json
+{
+  "type": "prediction",
+  "raw_pred": "A",
+  "raw_conf": 0.88,
+  "stable_pred": "A",
+  "stable_conf": 0.9,
+  "committed_text": "AB ",
+  "token_committed": true,
+  "committed_token": "A",
+  "topk": [{"label":"A","conf":0.88}],
+  "latency_ms": 28.5,
+  "model_fps_estimate": 13.7,
+  "network_latency_ms": 34,
+  "model_loaded": true,
+  "model_error": null
+}
+```
+
+Control messages:
+
+```json
+{"type":"control","action":"clear_text"}
+{"type":"control","action":"backspace"}
+```
+
+## 11) Testing and validation
+
+Minimal sanity checks included:
+- backend health endpoint (`/health`)
+- model load failure handling test
+- frame decode test
+- smoothing logic tests
+
+Run tests:
+
+```bash
+cd isl-yolo-webapp
+source .venv/bin/activate
+pytest backend/tests -q
+```
+
+## 12) Configuration
+
+Use `.env` (copy from `.env.example`). Key options:
+- `MODEL_PATH`, `MODEL_MODE`
+- `FRAME_SIZE`, `SEND_FPS`
+- `MIN_CONFIDENCE`, `MIN_MARGIN`
+- `SMOOTHING_WINDOW`, `MIN_VOTES`
+- `COMMIT_COOLDOWN_MS`
+- `UNKNOWN_LABEL`, `SPACE_LABEL`, `DELETE_LABEL`
+- `ENABLE_HAND_ROI`, `HAND_ROI_ONLY_FOR_DIRECT_CLS`, `HAND_ROI_MASK_BACKGROUND`
+- `HAND_ROI_EXPAND_RATIO`, `HAND_ROI_SMOOTHING`, `HAND_ROI_MIN_AREA_RATIO`
+- `HAND_ROI_REUSE_LAST_BBOX_FRAMES`, `HAND_ROI_MAX_NUM_HANDS`
+- `HAND_ROI_MIN_DETECTION_CONFIDENCE`, `HAND_ROI_MIN_TRACKING_CONFIDENCE`
+- `ENABLE_TOPK`, `DEBUG`
+- `DIRECT_CLS_ENABLE_TTA`, `DIRECT_CLS_INCLUDE_FLIP`, `DIRECT_CLS_INCLUDE_ZOOM`
+- `DIRECT_CLS_ZOOM_RATIO`, `DIRECT_CLS_MIN_VIEW_VOTES`
+
+## 13) CPU/GPU and performance tuning
+
+CPU-friendly defaults:
+- `FRAME_SIZE=416`
+- `SEND_FPS=10~15`
+- Nano model (`yolo11n`/`yolov8n`)
+
+If lagging:
+- reduce `FRAME_SIZE` to 320
+- reduce `SEND_FPS` to 10
+- increase `COMMIT_COOLDOWN_MS`
+- tighten `MIN_CONFIDENCE` and `MIN_VOTES`
+
+GPU mode:
+- install CUDA-enabled PyTorch
+- set `--device 0` for training
+
+## 14) Troubleshooting
+
+- Camera denied:
+  - allow camera permission in browser
+  - close other apps locking webcam
+- Backend offline:
+  - verify `uvicorn backend.app:app` running on configured host/port
+- Model missing:
+  - place valid `.pt` at `backend/models/best.pt`
+  - check `/health` response for `model_error`
+- Invalid frame payload:
+  - ensure frontend sends `data:image/jpeg;base64,...`
+- Noisy predictions:
+  - increase `SMOOTHING_WINDOW`, `MIN_VOTES`
+  - raise `MIN_CONFIDENCE`
+  - enable hand-only preprocessing:
+    - `ENABLE_HAND_ROI=true`
+    - `HAND_ROI_MASK_BACKGROUND=true`
+  - for webcam domain shift in `direct_cls`, keep TTA enabled:
+    - `DIRECT_CLS_ENABLE_TTA=true`
+    - `DIRECT_CLS_INCLUDE_FLIP=true`
+    - `DIRECT_CLS_INCLUDE_ZOOM=true`
+  - increase `DIRECT_CLS_MIN_VIEW_VOTES` to `3` for stricter consensus
+- Wrong model mode:
+  - `MODEL_MODE=detect` expects detection-trained weights
+  - `MODEL_MODE=direct_cls` expects classification-trained weights
+- High validation accuracy but poor webcam accuracy:
+  - this is usually domain shift (lighting/background/camera angle), not only training epochs
+  - capture 300-500 images per target sign from your own webcam and fine-tune
+  - include a `no_sign`/`unknown` class for real background frames in classification mode
+- Hand ROI not active:
+  - install dependencies again (`pip install -r requirements.txt`)
+  - check `/health` for `hand_roi_available` and `hand_roi_error`
+
+## 15) Limitations and next steps
+
+Current MVP limits:
+- best for static signs/common commands
+- does not solve full ISL sentence grammar
+- signer/environment variation can reduce accuracy
+- low light and motion blur can hurt detection
+
+Planned upgrades:
+- dynamic sign sequence model (LSTM/TCN/Transformer) using existing hook
+- language model for sentence refinement
+- multilingual output and transliteration
+- model backend abstraction for ONNX runtime inference

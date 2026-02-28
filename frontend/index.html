@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ISL Realtime Recognition MVP</title>
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;700;800&family=Sora:wght@400;600;700&display=swap"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="bg-shape bg-shape-a"></div>
+    <div class="bg-shape bg-shape-b"></div>
+
+    <main class="app-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Realtime ISL</p>
+          <h1>Indian Sign Language Recognition</h1>
+          <p class="subtitle">
+            YOLO-based live sign detection with temporal smoothing, token commit logic, and speech output.
+          </p>
+        </div>
+        <div class="backend-config">
+          <label for="backend-url">Backend URL</label>
+          <div class="inline-input">
+            <input id="backend-url" type="text" value="http://127.0.0.1:8000" />
+            <button id="save-backend-btn" class="secondary">Save</button>
+          </div>
+        </div>
+      </header>
+
+      <section class="status-row">
+        <div class="status-chip" id="camera-status">Camera: idle</div>
+        <div class="status-chip" id="socket-status">Connection: disconnected</div>
+        <div class="status-chip" id="model-status">Model: checking...</div>
+        <div class="status-chip" id="processing-status">Processing: idle</div>
+      </section>
+
+      <section class="grid">
+        <article class="panel video-panel">
+          <div class="panel-head">
+            <h2>Camera Feed</h2>
+            <div class="panel-actions">
+              <button id="start-camera-btn">Start Camera</button>
+              <button id="stop-camera-btn" class="secondary" disabled>Stop Camera</button>
+            </div>
+          </div>
+
+          <div class="video-wrapper">
+            <video id="webcam" autoplay playsinline muted></video>
+            <div class="video-overlay">
+              <p>Stable Sign</p>
+              <h3 id="stable-sign-pill">No sign detected</h3>
+            </div>
+          </div>
+        </article>
+
+        <article class="panel output-panel">
+          <div class="panel-head">
+            <h2>Recognition Output</h2>
+            <div class="panel-actions">
+              <button id="tts-toggle-btn" class="secondary">TTS: Off</button>
+              <button id="debug-toggle-btn" class="secondary">Debug</button>
+            </div>
+          </div>
+
+          <div class="metrics-grid">
+            <div class="metric-card">
+              <p>Raw Sign</p>
+              <h3 id="raw-sign">No sign detected</h3>
+            </div>
+            <div class="metric-card">
+              <p>Stable Sign</p>
+              <h3 id="stable-sign">No sign detected</h3>
+            </div>
+            <div class="metric-card">
+              <p>Confidence</p>
+              <h3 id="confidence">0.00</h3>
+            </div>
+            <div class="metric-card">
+              <p>Model FPS</p>
+              <h3 id="model-fps">0.0</h3>
+            </div>
+            <div class="metric-card">
+              <p>Inference Latency</p>
+              <h3 id="latency">0 ms</h3>
+            </div>
+            <div class="metric-card">
+              <p>Network Latency</p>
+              <h3 id="network-latency">0 ms</h3>
+            </div>
+          </div>
+
+          <div class="text-output" id="commit-flash-target">
+            <div class="text-output-head">
+              <h3>Assembled Text</h3>
+              <div class="panel-actions">
+                <button id="backspace-btn" class="secondary">Backspace</button>
+                <button id="clear-text-btn" class="danger">Clear Text</button>
+              </div>
+            </div>
+            <p id="committed-text" class="committed-text">(empty)</p>
+          </div>
+
+          <div class="text-output text-to-sign">
+            <div class="text-output-head">
+              <h3>Text to ISL Signs</h3>
+              <div class="panel-actions">
+                <button id="use-assembled-btn" class="secondary">Use Assembled</button>
+                <button id="generate-sign-seq-btn" class="secondary">Generate</button>
+                <button id="play-sign-seq-btn">Play</button>
+                <button id="stop-sign-seq-btn" class="secondary">Stop</button>
+              </div>
+            </div>
+
+            <textarea
+              id="text-to-sign-input"
+              class="text-to-sign-input"
+              placeholder="Type text to play as ISL sign sequence (A-Z, 0-9, words supported as spelling fallback)."
+            ></textarea>
+
+            <div class="sign-seq-preview">
+              <div class="sign-preview-card">
+                <img id="sign-preview-image" alt="Current sign preview" />
+                <div class="sign-preview-fallback" id="sign-preview-fallback">No preview</div>
+              </div>
+              <div class="sign-preview-meta">
+                <p>Current Token</p>
+                <h3 id="sign-preview-label">-</h3>
+                <p id="sign-preview-status">Idle</p>
+              </div>
+            </div>
+
+            <div id="sign-token-timeline" class="sign-token-timeline"></div>
+          </div>
+
+          <aside id="debug-panel" class="debug-panel hidden">
+            <h3>Debug Panel</h3>
+            <div class="debug-block">
+              <h4>Top-K</h4>
+              <ul id="topk-list"></ul>
+            </div>
+            <div class="debug-block">
+              <h4>Smoothing Buffer</h4>
+              <ul id="buffer-list"></ul>
+            </div>
+            <div class="debug-block">
+              <h4>Last Error</h4>
+              <p id="error-message">None</p>
+            </div>
+          </aside>
+        </article>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
